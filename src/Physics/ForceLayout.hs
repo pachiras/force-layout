@@ -59,7 +59,7 @@ module Physics.ForceLayout
 
        , PID
        , Edge
-       , Ensemble(..), forces, particles
+       , Ensemble(..), forcesE, forcesT, forcesQ, particles
 
          -- * Pre-defined forces
 
@@ -121,13 +121,21 @@ type PID = Int
 
 -- | An edge is a pair of particle identifiers.
 type Edge = (PID, PID)
+type Triplet = (PID, PID, PID)
+type Quadruplet = (PID, PID, PID, PID)
+
+type ForceFieldE v n = Point v n -> Point v n -> v n
+type ForceFieldT v n = Point v n -> Point v n -> Point v n -> v n
+type ForceFieldQ v n = Point v n -> Point v n -> Point v n -> Point v n -> v n
 
 -- | An @Ensemble@ is a physical configuration of particles.  It
 --   consists of a mapping from particle IDs (unique integers) to
 --   particles, and a list of forces that are operative.  Each force
 --   has a list of edges to which it applies, and is represented by a
 --   function giving the force between any two points.
-data Ensemble v n = Ensemble { _forces    :: [([Edge], Point v n -> Point v n -> v n)]
+data Ensemble v n = Ensemble { _forcesE   :: [([Edge], ForceFieldE v n)]
+                             , _forcesT   :: [([Triplet], (ForceFieldT v n, ForceFieldT v n, ForceFieldT v n))]
+                             , _forcesQ   :: [([Quadruplet], (ForceFieldQ v n, ForceFieldQ v n, ForceFieldQ v n, ForceFieldQ v n))]
                              , _particles :: M.Map PID (Particle v n)
                              }
 
@@ -153,21 +161,44 @@ particleStep d = stepPos . stepVel
 --   ensemble.
 recalcForces :: (Additive v, Num n) => Ensemble v n -> Ensemble v n
 recalcForces = calcForces . zeroForces
-  where zeroForces = (particles %~) . M.map $ force .~ zero
-        calcForces (Ensemble fs ps)
-          = Ensemble fs
-            (ala Endo F.foldMap (concatMap (\(es, f) -> (map (mkForce f) es)) fs) ps)
-        -- mkForce :: (Point v n -> Point v n -> v n)
+  where 
+        zeroForces = (particles %~) . M.map $ force .~ zero
+        calcForces (Ensemble fsE fsT fsQ ps )
+          = Ensemble fsE fsT fsQ 
+                $ ala Endo F.foldMap (applyForce mkForceE fsE ++ applyForce mkForceT fsT ++ applyForce mkForceQ fsQ) ps
+
+        applyForce :: (t1 -> a -> b) -> [([a], t1)] -> [b]
+        applyForce mkForce = concatMap (\(es, f) -> (map (mkForce f) es))
+
+        -- mkForceE :: (Point v n -> Point v n -> v n)
         --         -> Edge
         --         -> M.Map Int (Particle v n)
         --         -> M.Map Int (Particle v n)
-        mkForce f (i1, i2) m
+        mkForceE f (i1, i2) m
           = case (M.lookup i1 m, M.lookup i2 m) of
               (Just p1, Just p2) ->
                 ( M.adjust (force %~ (^+^ f (p1^.pos) (p2^.pos))) i1
                 . M.adjust (force %~ (^-^ f (p1^.pos) (p2^.pos))) i2)
                 m
               _                  -> m
+
+        mkForceT (f1, f2, f3) (i1, i2, i3) m
+            = case (M.lookup i1 m, M.lookup i2 m, M.lookup i3 m) of
+                (Just p1, Just p2, Just p3) ->
+                    ( M.adjust (force %~ (^+^ f1 (p1^.pos) (p2^.pos) (p3^.pos))) i1
+                    . M.adjust (force %~ (^+^ f2 (p1^.pos) (p2^.pos) (p3^.pos))) i2
+                    . M.adjust (force %~ (^+^ f3 (p1^.pos) (p2^.pos) (p3^.pos))) i3) m
+                _ -> m
+        
+        mkForceQ (f1, f2, f3, f4) (i1, i2, i3, i4) m
+            = case (M.lookup i1 m, M.lookup i2 m, M.lookup i3 m, M.lookup i4 m) of
+                (Just p1, Just p2, Just p3, Just p4) ->
+                    ( M.adjust (force %~ (^+^ f1 (p1^.pos) (p2^.pos) (p3^.pos) (p4^.pos))) i1
+                    . M.adjust (force %~ (^+^ f2 (p1^.pos) (p2^.pos) (p3^.pos) (p4^.pos))) i2
+                    . M.adjust (force %~ (^+^ f3 (p1^.pos) (p2^.pos) (p3^.pos) (p4^.pos))) i3
+                    . M.adjust (force %~ (^+^ f4 (p1^.pos) (p2^.pos) (p3^.pos) (p4^.pos))) i4) m
+                _ -> m
+
 
 -- | Compute the total kinetic energy of an ensemble.
 kineticEnergy :: (Metric v, Num n) => Ensemble v n -> n
